@@ -1308,8 +1308,8 @@ static BOOL WINAPI hook_SetCurrentDirectoryA(const CHAR *dir)
 static void hook(void *to_hook, const void *replace)
 {
     DWORD old_protect;
-    size_t offset;
 #ifdef __aarch64__
+    size_t offset;
     struct hooked_function
     {
         DWORD ldr, br;
@@ -1326,6 +1326,7 @@ static void hook(void *to_hook, const void *replace)
 
     __clear_cache(hooked_function, (char *)hooked_function + sizeof(*hooked_function));
 #elif defined(__x86_64__)
+    size_t offset;
     struct hooked_function
     {
         char jmp[8];
@@ -1350,6 +1351,23 @@ static void hook(void *to_hook, const void *replace)
     hooked_function->jmp[7] = 0xcc;
     /* Dest address absolute */
     hooked_function->dst = replace;
+#elif defined(__powerpc64__)
+    struct hooked_function
+    {
+        DWORD lnia, ld, mtctr, bctr;
+        const void *dst;
+    } *hooked_function = to_hook;
+
+    if(!VirtualProtect(hooked_function, sizeof(*hooked_function), PAGE_EXECUTE_READWRITE, &old_protect))
+        fprintf(stderr, "Failed to make hooked function writeable.\n");
+
+    hooked_function->lnia   = 0x4c000004;   /* lnia r0 */
+    hooked_function->ld     = 0xe980000c;   /* ld r12, 12(r0) */
+    hooked_function->mtctr  = 0x7d8903a6;   /* mtctr r12 */
+    hooked_function->bctr   = 0x4e800420;   /* bctr */
+    hooked_function->dst    = replace;
+
+    __clear_cache(hooked_function, (char *)hooked_function + sizeof(*hooked_function));
 #else
 #error Implement hooks for your platform
 #endif
