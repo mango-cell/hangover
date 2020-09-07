@@ -48,8 +48,6 @@ void callback_init(struct callback_entry *entry, unsigned int params, void *proc
 
     entry->br = 0xd61f0000 | ((params + 1) << 5); /* br x[params + 1] */
 
-    entry->selfptr = entry;
-
     __clear_cache(&entry->ldr_self, &entry->br + 1);
 #elif defined(__x86_64__)
     /* See init_reverse_wndproc in dlls/user32/main.c for details. The only difference
@@ -80,11 +78,30 @@ void callback_init(struct callback_entry *entry, unsigned int params, void *proc
         memset(entry->code, 0xcc, sizeof(entry->code));
         memcpy(entry->code, wrapper_code3, sizeof(wrapper_code3));
     }
-    entry->selfptr = entry; /* Note that this is not read by the asm code, but put it in place anyway. */
+#elif defined(__powerpc64__)
+    size_t offset;
+
+    /* Note: A maximum of 4 parameters are supported. */
+
+    params += 3; /* first arg is in r3 */
+    entry->lnia     = 0x4c000004; /* lnia r0 */
+    offset = offsetof(struct callback_entry, selfptr) - offsetof(struct callback_entry, ldr_self);
+    /* the target register index is stored in bits 21-25 */
+    entry->ldr_self = 0xe8000000 | (params << 21) | offset; /* ld r[params], offset(r0) */
+
+    offset = offsetof(struct callback_entry, host_proc) - offsetof(struct callback_entry, ldr_self);
+    entry->ldr_proc = 0xe8000000 | ((params + 1) << 21) | offset;   /* ld r[params + 1], offset(r0) */
+
+    entry->mr       = 0x7c0c0378 | ((params + 1) << 21) | ((params + 1) << 11); /* or r12, r[params + 1], r[params + 1] */
+    entry->mtctr    = 0x7d8903a6; /* mtctr r12 */
+    entry->bctr     = 0x4e800420; /* bctr */
+
+    __clear_cache(&entry->lnia, &entry->bctr + 1);
 #else
 #error callback helper not supported on your platform
 #endif
 
+    entry->selfptr = entry;
     entry->host_proc = proc;
     entry->guest_proc = 0;
 }
